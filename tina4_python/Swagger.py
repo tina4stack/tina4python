@@ -31,6 +31,14 @@ class Swagger:
         Swagger.set_swagger_value(callback, "secure", True)
 
     @staticmethod
+    def add_header_auth(callback):
+        Swagger.set_swagger_value(callback, "headerauth", True)
+
+    @staticmethod
+    def add_query_auth(callback):
+        Swagger.set_swagger_value(callback, "queryauth", True)
+
+    @staticmethod
     def add_tags(tags, callback):
         Swagger.set_swagger_value(callback, "tags", tags)
 
@@ -62,7 +70,7 @@ class Swagger:
         return params
 
     @staticmethod
-    def get_swagger_entry(url, method, tags, summary, description, produces, security, params=None, example=None,
+    def get_swagger_entry(url, method, tags, summary, description, produces, security, headerauth=None, queryauth=None, params=None, example=None,
                           responses=None):
 
         if params is None:
@@ -72,9 +80,19 @@ class Swagger:
         if example is not None:
             schema = {"type": "object", "example": example}
 
-        secure_annotation = [],
+        secure_annotation = []
+
+        # If security is defined, add bearerAuth
         if security:
-            secure_annotation = [{"bearerAuth": []}];
+            secure_annotation.append({"bearerAuth": []})
+
+        # If we can add API key auth from the header
+        if headerauth:
+            secure_annotation.append({"ApiKeyHeader": []})
+
+        # If we can add API key auth from the query
+        if queryauth:
+            secure_annotation.append({"ApiKeyQuery": []})
 
         new_params = []
         for param in params:
@@ -123,6 +141,10 @@ class Swagger:
             swagger["example"] = None
         if not "secure" in swagger:
             swagger["secure"] = None
+        if not "headerauth" in swagger:
+            swagger["headerauth"] = None
+        if not "queryauth" in swagger:
+            swagger["queryauth"] = None
 
         if isinstance(swagger["tags"], str):
             swagger["tags"] = [swagger["tags"]]
@@ -132,12 +154,23 @@ class Swagger:
     @staticmethod
     def get_json(request):
         paths = {}
+        apikey_auth = False # If we have any routes that require api key auth
         for route in tina4_python.tina4_routes.values():
 
             if "swagger" in route:
                 if route["swagger"] is not None:
                     swagger = Swagger.parse_swagger(route["swagger"])
                     produces = {}
+
+                    header_auth = False
+
+                    if swagger["headerauth"]:
+                        header_auth = True
+
+                    query_auth = False
+
+                    if swagger["queryauth"]:
+                        query_auth = True
 
                     responses = {
                         "200": {"description": "Success"},
@@ -154,6 +187,8 @@ class Swagger:
                                                                                                ["application/json",
                                                                                                 "html/text"],
                                                                                                swagger["secure"],
+                                                                                               swagger["headerauth"],
+                                                                                               swagger["queryauth"],
                                                                                                swagger["params"],
                                                                                                swagger["example"],
                                                                                                responses)
@@ -172,10 +207,39 @@ class Swagger:
                 "version": os.getenv("SWAGGER_VERSION", "1.0.0(SWAGGER_VERSION)")
             },
             "components": {
-                "securitySchemes": {"bearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}}},
+                "securitySchemes": {}
+            },
             "basePath": "",
             "paths": paths
         }
+
+        # Populate the security schemes
+        if header_auth:
+            json_object["components"]["securitySchemes"]["ApiKeyHeader"] = {
+                "type": "apiKey",
+                "in": "header",
+                "name": "X-API-KEY"
+            }
+
+        if query_auth:
+            json_object["components"]["securitySchemes"]["ApiKeyQuery"] = {
+                "type": "apiKey",
+                "in": "query",
+                "name": "api-key"
+            }
+
+        # Now you can set the security requirements for your API paths
+        json_object["security"] = []
+
+        # Example of how to apply both security schemes globally or to specific operations
+        if header_auth and query_auth:
+            json_object["security"].append({"ApiKeyHeader": [], "ApiKeyQuery": []})
+        elif header_auth:
+            json_object["security"].append({"ApiKeyHeader": []})
+        elif query_auth:
+            json_object["security"].append({"ApiKeyQuery": []})
+
+        json_object["components"]["securitySchemes"]["bearerAuth"] = {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}
 
         return json_object
 
@@ -203,6 +267,21 @@ def secure():
 
     return actual_secure
 
+# Pass the api key as a header
+def headerauth():
+    def actual_header_auth(callback):
+        Swagger.add_header_auth(callback)
+        return callback
+
+    return actual_header_auth
+
+# Pass the api key as a query parameter
+def queryauth():
+    def actual_query_auth(callback):
+        Swagger.add_query_auth(callback)
+        return callback
+
+    return actual_query_auth
 
 def tags(tags):
     def actual_tags(callback):
